@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // Holds a symbol table.
 // Actually a singly linked list.
@@ -8,6 +9,47 @@ struct symbol_table{
 	int address;
 	struct symbol_table * next;
 };
+
+// Appends string str with a single character chr.
+// Returns 0 on memory allocation failure, 1 on success.
+int string_append(char ** str, char chr){
+	int len;
+	if(*str == NULL){
+		len = 0;
+	}else{
+		len = (int)strlen(*str);
+	}
+	if(len == 0){
+		*str = malloc(sizeof(char) * 16);
+		if(*str == NULL){
+			return 0;
+		}else{
+			(*str)[len] = chr;
+			(*str)[len + 1] = '\0';
+			return 1;
+		}
+	}else{
+		if((len + 1) % 16 == 0){
+			char * temp = malloc(sizeof(char) * (len + 17));
+			if(temp == NULL){
+				return 0;
+			}else{
+				for(int i = 0; i < len; i++){
+					temp[i] = (*str)[i];
+				}
+				free(*str);
+				*str = temp;
+				(*str)[len] = chr;
+				(*str)[len + 1] = '\0';
+				return 1;
+			}
+		}else{
+			(*str)[len] = chr;
+			(*str)[len + 1] = '\0';
+			return 1;
+		}
+	}
+}
 
 // Adds a new entry to the symbol table.
 // Returns 0 on memory allocation failure, 1 on success.
@@ -164,6 +206,58 @@ struct symbol_table * symbol_table_initialize(){
 	return symbolTable;
 }
 
+// First pass of the assembly process.
+// Expands the symbol table with user-defined labels.
+// Returns 0 on memory allocation failure, 1 on success.
+int assembly_first_pass(FILE * inputFile, struct symbol_table ** headSymbol){
+	int lineNumber = -1;
+	char thisChar;
+	while(fscanf(inputFile, "%c", &thisChar) == 1){
+		if(thisChar == '\n' || thisChar == '\r' || thisChar == ' ' || thisChar == '\t'){
+			// Empty line or space or tab.
+			continue;
+		}else if(thisChar == '/'){
+			// Comment line.
+			while(fscanf(inputFile, "%c", &thisChar) == 1){
+				if(thisChar == '\n'){
+					break;
+				}
+			}
+		}else if(thisChar == '('){
+			// Beginning of label.
+			char * thisLabel = NULL;
+			while(fscanf(inputFile, "%c", &thisChar) == 1){
+				if(thisChar == ')'){
+					// End of label.
+					symbol_table_add_entry(headSymbol, thisLabel, lineNumber + 1);
+					break;
+				}else{
+					// Label character.
+					if(!string_append(&thisLabel, thisChar)){
+						free(thisLabel);
+						return 0;
+					}
+				}
+			}
+			// Ignore everything after label.
+			while(fscanf(inputFile, "%c", &thisChar) == 1){
+				if(thisChar == '\n'){
+					break;
+				}
+			}
+		}else{
+			// Beginning of instruction.
+			lineNumber++;
+			while(fscanf(inputFile, "%c", &thisChar) == 1){
+				if(thisChar == '\n'){
+					break;
+				}
+			}
+		}
+	}
+	return 1;
+}
+
 int main(int argc, char ** argv){
 	// Get input file.
 	if(argc != 2){
@@ -183,6 +277,12 @@ int main(int argc, char ** argv){
 		return 0;
 	}
 
-	printf("%s %d\n", symbolTable->next->symbol, symbolTable->next->address);
+	// First pass of the assembly process.
+	if(!assembly_first_pass(inputFile, &symbolTable)){
+		printf("Assembly failed while allocating memory.\n");
+		return 0;
+	}
+
+	printf("%s %d\n", symbolTable->symbol, symbolTable->address);
 	return 0;
 }
