@@ -1,6 +1,10 @@
+// This is a very basic implementation of the Hack assembler.
+// It assumes the input program is error-free.
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 // Holds a symbol table.
 // Actually a singly linked list.
@@ -11,6 +15,7 @@ struct symbol_table{
 };
 
 // Appends string str with a single character chr.
+// String str must be dynamically allocated.
 // Returns 0 on memory allocation failure, 1 on success.
 int string_append(char ** str, char chr){
 	int len;
@@ -51,19 +56,19 @@ int string_append(char ** str, char chr){
 	}
 }
 
-// Concatenates string str1 and string str2.
-// Returns a pointer to the destination string.
-// Returns NULL on memory allocation failure.
-char * string_concatenate(char * str1, char * str2){
-	int size = (int)(((strlen(str1) + strlen(str2)) / 16 + 1) * 16);
+// Concatenates string str2 to the end of string str1.
+// String str1 must be dynamically allocated.
+// Returns 0 on memory allocation failure, 1 on success.
+int string_concatenate(char ** str1, char * str2){
+	int size = (int)(((strlen(*str1) + strlen(str2)) / 16 + 1) * 16);
 	char * dst = malloc(size * sizeof(char));
 	if(dst == NULL){
-		return NULL;
+		return 0;
 	}else{
 		int flag = 0;
 		int subFlag = 0;
-		while(str1[subFlag] != '\0'){
-			dst[flag] = str1[subFlag];
+		while((*str1)[subFlag] != '\0'){
+			dst[flag] = (*str1)[subFlag];
 			flag++;
 			subFlag++;
 		}
@@ -74,8 +79,27 @@ char * string_concatenate(char * str1, char * str2){
 			subFlag++;
 		}
 		dst[++flag] = '\0';
-		return dst;
+		free(*str1);
+		*str1 = dst;
+		return 1;
 	}
+}
+
+// Converts a decimal value to an unsigned binary string of n bits.
+// Returns a pointer to the binary string.
+// Does not check for errors.
+char * dec_to_bin(int decValue, int n){
+	char * binString = NULL;
+	int bin;
+	for(int i = n - 1; i >= 0; i--){
+		bin = decValue >> i;
+		if(bin & 1){
+			string_append(&binString, '1');
+		}else{
+			string_append(&binString, '0');
+		}
+	}
+	return binString;
 }
 
 // Checks whether a given string is a symbol in the symbol table.
@@ -300,6 +324,7 @@ int assembly_first_pass(FILE * inputFile, struct symbol_table ** headSymbol){
 // Second pass of the assembly process.
 // Returns 0 on memory allocation failure, 1 on success.
 int assembly_second_pass(FILE * inputFile, FILE * outputFile, struct symbol_table ** headSymbol){
+	int nextVariableAddress = 16;
 	char thisChar;
 	while(fscanf(inputFile, "%c", &thisChar) == 1){
 		if(thisChar == '\r' || thisChar == '\n' || thisChar == ' ' || thisChar == '\t'){
@@ -314,6 +339,385 @@ int assembly_second_pass(FILE * inputFile, FILE * outputFile, struct symbol_tabl
 			}
 		}else{
 			// Instruction line.
+			char * thisInstruction = NULL;
+			string_append(&thisInstruction, '\0');
+			if(thisChar == '@'){
+				// A instruction.
+				if(!string_append(&thisInstruction, '0')){
+					return 0;
+				}
+				fscanf(inputFile, "%c", &thisChar);
+				if(isdigit(thisChar)){
+					// Constant.
+					int thisConstant = thisChar - 48;
+					while(fscanf(inputFile, "%c", &thisChar) == 1){
+						if(isdigit(thisChar)){
+							thisConstant = thisConstant * 10 + thisChar - 48;
+						}else{
+							// End of constant.
+							if(!string_concatenate(&thisInstruction, dec_to_bin(thisConstant, 15))){
+								free(thisInstruction);
+								return 0;
+							}
+							fprintf(outputFile, "%s\n", thisInstruction);
+							free(thisInstruction);
+							// Ignore everything after constant.
+							if(thisChar != '\n'){
+								while(fscanf(inputFile, "%c", &thisChar) == 1){
+									if(thisChar == '\n'){
+										break;
+									}
+								}
+							}
+							break;
+						}
+					}
+				}else{
+					// Symbol.
+					char * thisSymbol = NULL;
+					if(!string_append(&thisSymbol, thisChar)){
+						return 0;
+					}
+					while(fscanf(inputFile, "%c", &thisChar) == 1){
+						if(!isalnum(thisChar) && thisChar != '_' && thisChar != '.' && thisChar != '$' && thisChar != ':'){
+							// End of symbol.
+							int thisAddress = symbol_table_check(*headSymbol, thisSymbol);
+							if(thisAddress == -1){
+								// New symbol.
+								if(!symbol_table_push(headSymbol, thisSymbol, nextVariableAddress)){
+									free(thisSymbol);
+									return 0;
+								}
+								if(!string_concatenate(&thisInstruction, dec_to_bin(nextVariableAddress, 15))){
+									free(thisInstruction);
+									return 0;
+								}
+								fprintf(outputFile, "%s\n", thisInstruction);
+								free(thisInstruction);
+								nextVariableAddress++;
+							}else{
+								// Recorded symbol.
+								free(thisSymbol);
+								if(!string_concatenate(&thisInstruction, dec_to_bin(thisAddress, 15))){
+									free(thisInstruction);
+									return 0;
+								}
+								fprintf(outputFile, "%s\n", thisInstruction);
+								free(thisInstruction);
+							}
+							// Ignore everything after symbol.
+							if(thisChar != '\n'){
+								while(fscanf(inputFile, "%c", &thisChar) == 1){
+									if(thisChar == '\n'){
+										break;
+									}
+								}
+							}
+							break;
+						}else{
+							if(!string_append(&thisSymbol, thisChar)){
+								free(thisSymbol);
+								return 0;
+							}
+						}
+					}
+				}
+			}else{
+				// C instruction.
+				string_concatenate(&thisInstruction, "111");
+				char * thisLine = NULL;
+				if(!string_append(&thisLine, thisChar)){
+					return 0;
+				}
+				while(fscanf(inputFile, "%c", &thisChar) == 1){
+					if(thisChar == '\r' || thisChar == '\n'){
+						// End of line.
+						break;
+					}else if(thisChar == ' ' || thisChar == '\t'){
+						// Space or tab.
+						continue;
+					}else if(thisChar == '/'){
+						// Beginning of comment.
+						while(fscanf(inputFile, "%c", &thisChar) == 1){
+							if(thisChar == '\n'){
+								break;
+							}
+						}
+						break;
+					}else{
+						// Instruction code.
+						if(!string_append(&thisLine, thisChar)){
+							free(thisLine);
+							return 0;
+						}
+					}
+				}
+				// Parse this line.
+				int isDest = 0;
+				int isJump = 0;
+				if(strchr(thisLine, '=') != NULL){
+					isDest = 1;
+				}
+				if(strchr(thisLine, ';') != NULL){
+					isJump = 1;
+				}
+				char * tempLine = malloc((int)(strlen(thisLine) + 1) * sizeof(char));
+				if(tempLine == NULL){
+					return 0;
+				}
+				strcpy(tempLine, thisLine);
+				// Parse comp.
+				char * thisComp = NULL;
+				if(isDest){
+					thisComp = strtok(tempLine, "=");
+					thisComp = strtok(NULL, ";");
+				}else{
+					thisComp = strtok(tempLine, ";");
+				}
+				if(strcmp(thisComp, "0") == 0){
+					if(!string_concatenate(&thisInstruction, "0101010")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "1") == 0){
+					if(!string_concatenate(&thisInstruction, "0111111")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "-1") == 0){
+					if(!string_concatenate(&thisInstruction, "0111010")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D") == 0){
+					if(!string_concatenate(&thisInstruction, "0001100")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "A") == 0){
+					if(!string_concatenate(&thisInstruction, "0110000")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "M") == 0){
+					if(!string_concatenate(&thisInstruction, "1110000")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "!D") == 0){
+					if(!string_concatenate(&thisInstruction, "0001101")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "!A") == 0){
+					if(!string_concatenate(&thisInstruction, "0110001")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "!M") == 0){
+					if(!string_concatenate(&thisInstruction, "1110001")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "-D") == 0){
+					if(!string_concatenate(&thisInstruction, "0001111")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "-A") == 0){
+					if(!string_concatenate(&thisInstruction, "0110011")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "-M") == 0){
+					if(!string_concatenate(&thisInstruction, "1110011")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D+1") == 0){
+					if(!string_concatenate(&thisInstruction, "0011111")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "A+1") == 0){
+					if(!string_concatenate(&thisInstruction, "0110111")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "M+1") == 0){
+					if(!string_concatenate(&thisInstruction, "1110111")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D-1") == 0){
+					if(!string_concatenate(&thisInstruction, "0001110")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "A-1") == 0){
+					if(!string_concatenate(&thisInstruction, "0110010")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "M-1") == 0){
+					if(!string_concatenate(&thisInstruction, "1110010")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D+A") == 0){
+					if(!string_concatenate(&thisInstruction, "0000010")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D+M") == 0){
+					if(!string_concatenate(&thisInstruction, "1000010")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D-A") == 0){
+					if(!string_concatenate(&thisInstruction, "0010011")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D-M") == 0){
+					if(!string_concatenate(&thisInstruction, "1010011")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "A-D") == 0){
+					if(!string_concatenate(&thisInstruction, "0000111")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "M-D") == 0){
+					if(!string_concatenate(&thisInstruction, "1000111")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D&A") == 0){
+					if(!string_concatenate(&thisInstruction, "0000000")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D&M") == 0){
+					if(!string_concatenate(&thisInstruction, "1000000")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D|A") == 0){
+					if(!string_concatenate(&thisInstruction, "0010101")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				if(strcmp(thisComp, "D|M") == 0){
+					if(!string_concatenate(&thisInstruction, "1010101")){
+						free(thisInstruction);
+						return 0;
+					}
+				}
+				// Parse dest.
+				char d1 = '0', d2 = '0', d3 = '0';
+				if(isDest){
+					strcpy(tempLine, thisLine);
+					if(strchr(strtok(tempLine, "="), 'A') != NULL){
+						d1 = '1';
+					}
+					if(strchr(strtok(tempLine, "="), 'D') != NULL){
+						d2 = '1';
+					}
+					if(strchr(strtok(tempLine, "="), 'M') != NULL){
+						d3 = '1';
+					}
+					free(tempLine);
+				}
+				if(!string_append(&thisInstruction, d1)){
+					free(thisInstruction);
+					return 0;
+				}
+				if(!string_append(&thisInstruction, d2)){
+					free(thisInstruction);
+					return 0;
+				}
+				if(!string_append(&thisInstruction, d3)){
+					free(thisInstruction);
+					return 0;
+				}
+				// Parse jump.
+				char j1 = '0', j2 = '0', j3 = '0';
+				if(isJump){
+					strcpy(tempLine, thisLine);
+					char * thisJump = strtok(tempLine, ";");
+					thisJump = strtok(NULL, ";");
+					if(strcmp(thisJump, "JGT") == 0){
+						j3 = '1';
+					}
+					if(strcmp(thisJump, "JEQ") == 0){
+						j2 = '1';
+					}
+					if(strcmp(thisJump, "JGE") == 0){
+						j2 = '1';
+						j3 = '1';
+					}
+					if(strcmp(thisJump, "JLT") == 0){
+						j1 = '1';
+					}
+					if(strcmp(thisJump, "JNE") == 0){
+						j1 = '1';
+						j3 = '1';
+					}
+					if(strcmp(thisJump, "JLE") == 0){
+						j1 = '1';
+						j2 = '1';
+					}
+					if(strcmp(thisJump, "JMP") == 0){
+						j1 = '1';
+						j2 = '1';
+						j3 = '1';
+					}
+					free(tempLine);
+				}
+				if(!string_append(&thisInstruction, j1)){
+					free(thisInstruction);
+					return 0;
+				}
+				if(!string_append(&thisInstruction, j2)){
+					free(thisInstruction);
+					return 0;
+				}
+				if(!string_append(&thisInstruction, j3)){
+					free(thisInstruction);
+					return 0;
+				}
+				fprintf(outputFile, "%s\n", thisInstruction);
+				free(thisInstruction);
+			}
 		}
 	}
 	return 1;
@@ -352,7 +756,7 @@ int main(int argc, char ** argv){
 		string_append(&outputFileName, argv[1][flag]);
 		flag++;
 	}
-	outputFileName = string_concatenate(outputFileName, ".hack");
+	string_concatenate(&outputFileName, ".hack");
 	FILE * outputFile = fopen(outputFileName, "w");
 	if(outputFile == NULL){
 		printf("Cannot create file %s.\n", outputFileName);
